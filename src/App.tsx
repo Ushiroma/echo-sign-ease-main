@@ -33,8 +33,11 @@ const App = () => (
 );
 */
 
+const keypointLabels = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+
 const App = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const overlayRef = useRef<HTMLCanvasElement>(null);
 
   // Initialize webcam
   useEffect(() => {
@@ -43,47 +46,83 @@ const App = () => {
     });
   }, []);
 
-  const captureFrame = async () => {
-    if (!videoRef.current) return;
+  // Send frame to backend
+  const sendFrameToBackend = async () => {
+    if (!videoRef.current) return null;
     const video = videoRef.current;
 
     const canvas = document.createElement("canvas");
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    if (!ctx) return null;
 
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    canvas.toBlob(async (blob) => {
-      if (!blob) return;
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, "image/jpeg")
+    );
+    if (!blob) return null;
 
-      const formData = new FormData();
-      formData.append("file", blob, "frame.jpg");
+    const formData = new FormData();
+    formData.append("file", blob, "frame.jpg");
 
-      try {
-        const response = await fetch("http://localhost:8000/recognize", {
-          method: "POST",
-          body: formData,
-        });
-        const data = await response.json();
-        console.log("Detected gestures:", data.gestures);
-      } catch (err) {
-        console.error(err);
-      }
-    }, "image/jpeg");
+    try {
+      const res = await fetch("http://localhost:8000/recognize", {
+        method: "POST",
+        body: formData,
+      });
+      return await res.json();
+    } catch (err) {
+      console.error(err);
+      return null;
+    }
   };
 
-  // Capture every 150ms (~6-7 FPS)
+  // Draw overlay
+  const drawOverlay = (gestures: number[] | undefined) => {
+    if (!overlayRef.current) return;
+    const ctx = overlayRef.current.getContext("2d");
+    if (!ctx) return;
+
+    // Clear previous overlay
+    ctx.clearRect(0, 0, overlayRef.current.width, overlayRef.current.height);
+
+    if (!gestures) return;
+
+    gestures.forEach((id, i) => {
+      const label = keypointLabels[id] ?? "Unknown";
+      ctx.fillStyle = "red";
+      ctx.font = "24px Arial";
+      ctx.fillText(`Gesture: ${label}`, 10, 30 + i * 30);
+    });
+  };
+
+  // Real-time loop
   useEffect(() => {
-    const interval = setInterval(captureFrame, 150);
+    const interval = setInterval(async () => {
+      const data = await sendFrameToBackend();
+      if (data) drawOverlay(data.gestures);
+    }, 150); // ~6-7 FPS
     return () => clearInterval(interval);
   }, []);
 
   return (
-    <div>
-      <video ref={videoRef} autoPlay muted width={640} height={480} />
-      <p>Check console for detected gestures in real-time</p>
+    <div style={{ position: "relative", width: "640px", height: "480px" }}>
+      <video
+        ref={videoRef}
+        autoPlay
+        muted
+        width={640}
+        height={480}
+        style={{ position: "absolute", top: 0, left: 0 }}
+      />
+      <canvas
+        ref={overlayRef}
+        width={640}
+        height={480}
+        style={{ position: "absolute", top: 0, left: 0, pointerEvents: "none" }}
+      />
     </div>
   );
 };
